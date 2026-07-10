@@ -35,6 +35,7 @@ class UnlooktoolGUI:
         self.root = root
         self.q: queue.Queue[str] = queue.Queue()
         self.running = False
+        self.proc: subprocess.Popen | None = None
 
         root.title(f"unlooktool - {DEVICE_NAME} ({DEVICE_CODENAME})")
         root.geometry("760x560")
@@ -127,6 +128,8 @@ class UnlooktoolGUI:
         ttk.Label(bar, textvariable=self.status, font=("Segoe UI", 9)).pack(side="left")
         self.progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
         self.progress.pack(side="right")
+        self.cancel_btn = ttk.Button(bar, text="Cancelar", command=self.cancel, state="disabled")
+        self.cancel_btn.pack(side="right", padx=(0, 8))
 
     # -------------------------------------------------------------- helpers
     def _write(self, text: str) -> None:
@@ -149,11 +152,22 @@ class UnlooktoolGUI:
         self.running = running
         for b in self.buttons:
             b.configure(state="disabled" if running else "normal")
+        self.cancel_btn.configure(state="normal" if running else "disabled")
         if running:
             self.progress.start(12)
         else:
             self.progress.stop()
             self.refresh_status()
+
+    def cancel(self) -> None:
+        """Termina el proceso en curso (p. ej. si fastboot quedo esperando)."""
+        proc = self.proc
+        if proc and proc.poll() is None:
+            self.q.put("\n[i] Cancelando por peticion del usuario...\n")
+            try:
+                proc.terminate()
+            except Exception as exc:  # noqa: BLE001
+                self.q.put(f"[!] No se pudo cancelar: {exc}\n")
 
     # --------------------------------------------------------------- actions
     def on_action(self, cmd: str, danger: bool, label: str) -> None:
@@ -206,8 +220,9 @@ class UnlooktoolGUI:
         try:
             proc = subprocess.Popen(
                 cmd, cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                stdin=subprocess.DEVNULL, text=True, bufsize=1,
             )
+            self.proc = proc
             assert proc.stdout is not None
             for line in proc.stdout:
                 self.q.put(line)
@@ -216,6 +231,7 @@ class UnlooktoolGUI:
         except Exception as exc:  # noqa: BLE001
             self.q.put(f"\n[!] Error al ejecutar: {exc}\n")
         finally:
+            self.proc = None
             self.q.put("__DONE__")
 
     def _poll_queue(self) -> None:

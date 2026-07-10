@@ -13,19 +13,21 @@ espera de 7 dias. Solo hay que activar antes "Desbloqueo de OEM".
 
 Automatiza:
   - Descarga e instalacion de Android platform-tools (adb/fastboot) oficiales.
-  - Apertura de las paginas oficiales de drivers USB y Mi Unlock.
-  - Autodeteccion del modelo (codename) y apertura de la fuente de ROM correcta.
+  - Apertura de las paginas oficiales de drivers USB.
+  - Verificacion del modelo (codename) y apertura de la fuente de ROM correcta.
+  - Desbloqueo del bootloader (fastboot flashing unlock).
   - Wipe data / factory reset via fastboot.
   - Flasheo de una ROM fastboot ya descargada (ejecuta su flash_all.bat).
 
 REQUISITOS PARA EL WIPE / FLASH:
   - El dispositivo debe ser TUYO.
-  - El bootloader debe estar DESBLOQUEADO (proceso oficial Mi Unlock).
+  - El bootloader debe estar DESBLOQUEADO (comando 'unlock'; el Mi A1 NO usa
+    Mi Unlock: se desbloquea con 'fastboot flashing unlock').
   - Las ROMs son ESPECIFICAS de cada modelo: usa siempre la de tu codename.
 
 Uso:
   python unlooktool.py                 # menu interactivo
-  python unlooktool.py setup           # descarga platform-tools + abre drivers/MiUnlock
+  python unlooktool.py setup           # descarga platform-tools + abre drivers
   python unlooktool.py drivers         # abre paginas de drivers USB
   python unlooktool.py devices         # lista dispositivos
   python unlooktool.py info            # datos del dispositivo (codename, etc.)
@@ -58,13 +60,11 @@ TOOLS_DIR = os.path.join(HERE, "platform-tools")
 # "Desbloqueo de OEM" en Opciones de desarrollador.
 DEVICE_NAME = "Xiaomi Mi A1"
 DEVICE_CODENAME = "tissot"
-DEVICE_IS_ANDROID_ONE = True
 
 # --------------------------------------------------------------------------- #
 # Fuentes oficiales / confiables (revisadas jul-2026)
 # --------------------------------------------------------------------------- #
 URL_PLATFORM_TOOLS = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
-URL_MI_UNLOCK = "https://en.miui.com/unlock/"            # (solo MIUI; el A1 NO lo necesita)
 URL_USB_DRIVER_MI = "https://xiaomidriver.com/"          # driver USB Xiaomi
 URL_USB_DRIVER_GOOGLE = "https://developer.android.com/studio/run/win-usb"  # Google USB driver
 # ROMs fastboot del Mi A1 (tissot). Son especificas del modelo (3-6 GB), no se
@@ -114,22 +114,29 @@ def run(cmd: list[str], check: bool = False, capture: bool = True) -> subprocess
 # --------------------------------------------------------------------------- #
 # setup: descarga de platform-tools + drivers
 # --------------------------------------------------------------------------- #
-def _download(url: str, dest: str) -> None:
-    """Descarga con barra de progreso simple (solo stdlib)."""
+def _download(url: str, dest: str, timeout: int = 30) -> None:
+    """Descarga con barra de progreso y timeout de red (solo stdlib)."""
     import urllib.request
 
     print(f"[i] Descargando: {url}")
-
-    def _hook(block_num, block_size, total_size):
-        if total_size > 0:
-            done = min(block_num * block_size, total_size)
-            pct = done * 100 // total_size
-            mb = done / (1024 * 1024)
-            tot = total_size / (1024 * 1024)
-            sys.stdout.write(f"\r    {pct:3d}%  ({mb:6.1f} / {tot:6.1f} MB)")
+    req = urllib.request.Request(url, headers={"User-Agent": "unlooktool"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+        total = int(resp.headers.get("Content-Length", 0))
+        done = 0
+        while True:
+            chunk = resp.read(64 * 1024)  # el timeout aplica a cada read()
+            if not chunk:
+                break
+            out.write(chunk)
+            done += len(chunk)
+            if total:
+                pct = done * 100 // total
+                sys.stdout.write(
+                    f"\r    {pct:3d}%  ({done/1048576:6.1f} / {total/1048576:6.1f} MB)"
+                )
+            else:
+                sys.stdout.write(f"\r    {done/1048576:6.1f} MB")
             sys.stdout.flush()
-
-    urllib.request.urlretrieve(url, dest, _hook)
     print()
 
 
@@ -306,10 +313,10 @@ def unlock_bootloader(assume_yes: bool = False) -> None:
     print("    MIRA LA PANTALLA DEL TELEFONO: usa Volumen +/- para elegir")
     print("    'Unlock the bootloader' y confirma con Power.\n")
     try:
-        run([fb, "flashing", "unlock"], check=True)
+        run([fb, "flashing", "unlock"], check=True, capture=False)
     except subprocess.CalledProcessError:
         print("[i] Probando comando alternativo (oem unlock)...")
-        run([fb, "oem", "unlock"])
+        run([fb, "oem", "unlock"], capture=False)
     print("\n[OK] Si confirmaste en el telefono, el bootloader quedara desbloqueado.")
     print("    Verifica con:  python unlooktool.py state")
 
@@ -340,15 +347,15 @@ def wipe_data(assume_yes: bool = False) -> None:
 
     print("\n[1/3] Formateando userdata...")
     try:
-        run([fb, "-w"], check=True)
+        run([fb, "-w"], check=True, capture=False)
     except subprocess.CalledProcessError:
         print("[i] Intentando metodo alternativo (erase)...")
-        run([fb, "erase", "userdata"])
-        run([fb, "erase", "cache"])
+        run([fb, "erase", "userdata"], capture=False)
+        run([fb, "erase", "cache"], capture=False)
 
     print("\n[2/3] Wipe completado.")
     print("[3/3] Reiniciando...")
-    run([fb, "reboot"])
+    run([fb, "reboot"], capture=False)
     print("[OK] Listo.")
 
 
@@ -390,25 +397,44 @@ def flash_rom(folder: str, assume_yes: bool = False) -> None:
     env = os.environ.copy()
     env["PATH"] = TOOLS_DIR + os.pathsep + env.get("PATH", "")
     print("[i] Ejecutando flash_all.bat...\n")
-    subprocess.run([script], cwd=os.path.dirname(script), env=env, shell=True)
+    subprocess.run([script], cwd=os.path.dirname(script), env=env)
     print("\n[OK] Proceso de flasheo finalizado (revisa la salida arriba).")
+
+
+def _no_fastboot_device() -> bool:
+    """Avisa si no hay dispositivo en fastboot (fastboot reboot se colgaria)."""
+    if _fastboot_ready():
+        return False
+    print("[!] No hay ningun dispositivo en modo fastboot.")
+    print("    Conecta el telefono en modo fastboot y reintenta")
+    print("    (o si el sistema arranca, activa Depuracion USB).")
+    return True
 
 
 def reboot(target: str = "system") -> None:
     adb, fb = _tools()
     target = (target or "system").lower()
+    adb_online = bool(adb) and "\tdevice" in run([adb, "devices"]).stdout if adb else False
+
     if target in ("system", "reboot", ""):
-        if adb:
-            run([adb, "reboot"])
+        if adb_online:
+            run([adb, "reboot"], capture=False)
+        elif _no_fastboot_device():
+            return
         else:
-            run([_require(fb, "fastboot"), "reboot"])
+            run([_require(fb, "fastboot"), "reboot"], capture=False)
     elif target in ("bootloader", "fastboot"):
-        if adb and "\tdevice" in run([adb, "devices"]).stdout:
-            run([adb, "reboot", "bootloader"])
-        else:
-            run([_require(fb, "fastboot"), "reboot", "bootloader"])
+        if adb_online:
+            run([adb, "reboot", "bootloader"], capture=False)
+        elif _no_fastboot_device():
+            return
+        else:  # ya esta en fastboot: reinicia de nuevo a bootloader
+            run([_require(fb, "fastboot"), "reboot", "bootloader"], capture=False)
     elif target == "recovery":
-        run([_require(adb, "adb"), "reboot", "recovery"])
+        if not adb_online:
+            print("[!] 'recovery' requiere el telefono encendido con Depuracion USB (adb).")
+            return
+        run([adb, "reboot", "recovery"], capture=False)
     else:
         print(f"[!] Objetivo desconocido: {target}  (reboot | bootloader | recovery)")
 
