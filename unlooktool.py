@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-unlooktool - Utilidad para Xiaomi en Windows (fastboot/adb)
+unlooktool - Utilidad para Xiaomi Mi A1 (tissot) en Windows (fastboot/adb)
 
 Pensada para dispositivos cuyo recovery/bootloader NO ofrece la opcion
 "Wipe data / Factory reset". Permite hacer ese borrado y otras operaciones
 de mantenimiento (flashear una ROM fastboot, ver estado, etc.) desde el PC.
+
+NOTA sobre el Mi A1: es un ANDROID ONE (no MIUI). El bootloader se desbloquea
+directo con 'fastboot flashing unlock' (comando 'unlock'), SIN Mi Unlock ni
+espera de 7 dias. Solo hay que activar antes "Desbloqueo de OEM".
 
 Automatiza:
   - Descarga e instalacion de Android platform-tools (adb/fastboot) oficiales.
@@ -26,7 +30,8 @@ Uso:
   python unlooktool.py devices         # lista dispositivos
   python unlooktool.py info            # datos del dispositivo (codename, etc.)
   python unlooktool.py state           # estado del bootloader (locked/unlocked)
-  python unlooktool.py rom             # detecta codename y abre la ROM correcta
+  python unlooktool.py unlock          # desbloquea el bootloader (Mi A1: sin Mi Unlock)
+  python unlooktool.py rom             # abre la ROM correcta (tissot)
   python unlooktool.py wipe            # wipe data/factory reset (pide confirmacion)
   python unlooktool.py flash <carpeta> # flashea una ROM fastboot extraida
   python unlooktool.py reboot [target] # reboot | bootloader | recovery | fastboot
@@ -46,16 +51,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS_DIR = os.path.join(HERE, "platform-tools")
 
 # --------------------------------------------------------------------------- #
+# Perfil del dispositivo objetivo: Xiaomi Mi A1
+# --------------------------------------------------------------------------- #
+# El Mi A1 es un ANDROID ONE (no MIUI): NO usa Mi Unlock ni espera de 7 dias.
+# Se desbloquea directo con 'fastboot flashing unlock' tras activar
+# "Desbloqueo de OEM" en Opciones de desarrollador.
+DEVICE_NAME = "Xiaomi Mi A1"
+DEVICE_CODENAME = "tissot"
+DEVICE_IS_ANDROID_ONE = True
+
+# --------------------------------------------------------------------------- #
 # Fuentes oficiales / confiables (revisadas jul-2026)
 # --------------------------------------------------------------------------- #
 URL_PLATFORM_TOOLS = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
-URL_MI_UNLOCK = "https://en.miui.com/unlock/"            # Mi Unlock oficial (Xiaomi)
+URL_MI_UNLOCK = "https://en.miui.com/unlock/"            # (solo MIUI; el A1 NO lo necesita)
 URL_USB_DRIVER_MI = "https://xiaomidriver.com/"          # driver USB Xiaomi
 URL_USB_DRIVER_GOOGLE = "https://developer.android.com/studio/run/win-usb"  # Google USB driver
-# ROMs: fuentes que permiten buscar por codename (NO descargamos automatico:
-# son 3-6 GB y especificas del modelo; abrimos la pagina correcta).
-URL_ROM_XMFU = "https://xmfirmwareupdater.com/"          # buscar por codename
-URL_ROM_XIAOMIROM = "https://xiaomirom.com/en/"          # fastboot/recovery por region
+# ROMs fastboot del Mi A1 (tissot). Son especificas del modelo (3-6 GB), no se
+# descargan automatico; abrimos la pagina correcta del codename.
+URL_ROM_TISSOT = "https://xiaomirom.com/en/rom/mi-a1-tissot-global-fastboot-recovery-rom/"
+URL_ROM_XMFU = f"https://xmfirmwareupdater.com/?search={DEVICE_CODENAME}"
 
 
 # --------------------------------------------------------------------------- #
@@ -144,9 +159,10 @@ def setup_tools(force: bool = False) -> None:
     print()
     print("[i] Ahora necesitas los DRIVERS USB de Xiaomi.")
     print(f"    - Driver Xiaomi:  {URL_USB_DRIVER_MI}")
-    print(f"    - Mi Unlock:      {URL_MI_UNLOCK}")
+    print(f"    - Google USB:     {URL_USB_DRIVER_GOOGLE}")
+    print(f"    [i] El {DEVICE_NAME} NO usa Mi Unlock: se desbloquea con 'unlock'.")
     try:
-        ans = input("\n¿Abrir las paginas de drivers y Mi Unlock en el navegador? [s/N]: ").strip().lower()
+        ans = input("\n¿Abrir las paginas de drivers en el navegador? [s/N]: ").strip().lower()
     except EOFError:
         ans = "n"
     if ans in ("s", "si", "y", "yes"):
@@ -158,8 +174,8 @@ def setup_tools(force: bool = False) -> None:
 
 
 def open_drivers() -> None:
-    """Abre en el navegador las paginas de drivers y Mi Unlock."""
-    for url in (URL_USB_DRIVER_MI, URL_USB_DRIVER_GOOGLE, URL_MI_UNLOCK):
+    """Abre en el navegador las paginas de drivers USB."""
+    for url in (URL_USB_DRIVER_MI, URL_USB_DRIVER_GOOGLE):
         print(f"    -> {url}")
         webbrowser.open(url)
 
@@ -167,10 +183,28 @@ def open_drivers() -> None:
 # --------------------------------------------------------------------------- #
 # Info del dispositivo / ROMs
 # --------------------------------------------------------------------------- #
+def _fastboot_ready() -> bool:
+    """True si hay un dispositivo en modo fastboot (evita que getvar se cuelgue)."""
+    fb = _find_tool("fastboot")
+    if not fb:
+        return False
+    try:
+        res = subprocess.run([fb, "devices"], text=True, capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return False
+    return bool(res.stdout.strip())
+
+
 def _getvar(var: str) -> str:
     """Lee una variable de fastboot getvar (fastboot escribe a stderr)."""
     fb = _require(_find_tool("fastboot"), "fastboot")
-    res = run([fb, "getvar", var])
+    # getvar espera indefinidamente si no hay device: comprobamos antes.
+    if not _fastboot_ready():
+        return ""
+    try:
+        res = subprocess.run([fb, "getvar", var], text=True, capture_output=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return ""
     output = (res.stderr or "") + (res.stdout or "")
     for line in output.splitlines():
         if line.lower().startswith(var.lower() + ":"):
@@ -195,21 +229,22 @@ def device_info() -> dict[str, str]:
 
 
 def open_rom() -> None:
-    """Autodetecta el codename y abre la fuente de ROM correcta."""
+    """Abre la fuente de ROM fastboot correcta para el Mi A1 (tissot)."""
     codename = _getvar("product")
     print()
-    if codename:
-        print(f"[i] Codename detectado: {codename}")
-        url = f"{URL_ROM_XMFU}?search={codename}"
+    if codename and codename.lower() != DEVICE_CODENAME:
+        print(f"[!] OJO: el dispositivo conectado reporta codename '{codename}',")
+        print(f"    pero esta herramienta esta configurada para {DEVICE_NAME} ('{DEVICE_CODENAME}').")
+        print(f"    Descarga la ROM de '{codename}', NO la de tissot, o brickeas el equipo.")
+        url = f"https://xmfirmwareupdater.com/?search={codename}"
     else:
-        print("[!] No se pudo detectar el codename (¿esta en modo fastboot?).")
-        print("    Abriendo el buscador general de ROMs.")
-        url = URL_ROM_XMFU
+        print(f"[i] {DEVICE_NAME} (codename: {DEVICE_CODENAME})")
+        url = URL_ROM_TISSOT
     print(f"    -> {url}")
-    print(f"    -> {URL_ROM_XIAOMIROM}")
+    print(f"    -> {URL_ROM_XMFU}")
     webbrowser.open(url)
-    webbrowser.open(URL_ROM_XIAOMIROM)
-    print("\n[i] Descarga la ROM *fastboot* de TU modelo y extraela. Luego:")
+    webbrowser.open(URL_ROM_XMFU)
+    print("\n[i] Descarga la ROM *fastboot* (trae flash_all.bat) y extraela. Luego:")
     print("    python unlooktool.py flash <carpeta_de_la_rom>")
 
 
@@ -239,9 +274,44 @@ def bootloader_state() -> None:
         print("[OK] Bootloader DESBLOQUEADO. Se puede formatear userdata / flashear.")
     elif val.lower() == "no":
         print("[X] Bootloader BLOQUEADO. fastboot no permitira borrar/flashear.")
-        print(f"    Desbloquea con Mi Unlock oficial: {URL_MI_UNLOCK}")
+        print(f"    El {DEVICE_NAME} es Android One: NO usa Mi Unlock.")
+        print("    1) En el telefono: Ajustes > Sistema > Opciones de desarrollador")
+        print("       > activa 'Desbloqueo de OEM'.")
+        print("    2) Entra a fastboot y ejecuta:  python unlooktool.py unlock")
     else:
         print("[?] No se pudo determinar el estado. ¿El device esta en modo fastboot?")
+
+
+def unlock_bootloader(assume_yes: bool = False) -> None:
+    """Desbloquea el bootloader del Mi A1 via 'fastboot flashing unlock'."""
+    fb = _require(_find_tool("fastboot"), "fastboot")
+    print("=" * 60)
+    print(f" DESBLOQUEAR BOOTLOADER - {DEVICE_NAME} ({DEVICE_CODENAME})")
+    print("=" * 60)
+    print("El Mi A1 es Android One: se desbloquea directo, sin Mi Unlock ni")
+    print("espera de 7 dias. REQUISITOS:")
+    print("  - Activar 'Desbloqueo de OEM' en Opciones de desarrollador.")
+    print("  - Esto BORRA TODOS los datos del telefono (es irreversible).\n")
+
+    if not run([fb, "devices"]).stdout.strip():
+        print("[!] No hay ningun dispositivo en modo fastboot.")
+        print("    Ejecuta primero:  python unlooktool.py reboot bootloader")
+        return
+
+    if not assume_yes and not _confirm(">> Confirmar desbloqueo (BORRA el telefono)"):
+        print("Cancelado.")
+        return
+
+    print("\n[i] Enviando comando de desbloqueo...")
+    print("    MIRA LA PANTALLA DEL TELEFONO: usa Volumen +/- para elegir")
+    print("    'Unlock the bootloader' y confirma con Power.\n")
+    try:
+        run([fb, "flashing", "unlock"], check=True)
+    except subprocess.CalledProcessError:
+        print("[i] Probando comando alternativo (oem unlock)...")
+        run([fb, "oem", "unlock"])
+    print("\n[OK] Si confirmaste en el telefono, el bootloader quedara desbloqueado.")
+    print("    Verifica con:  python unlooktool.py state")
 
 
 def _confirm(prompt: str) -> bool:
@@ -348,18 +418,19 @@ def reboot(target: str = "system") -> None:
 # --------------------------------------------------------------------------- #
 MENU = """
 ============================================================
-  {app}  -  utilidad Xiaomi para Windows (fastboot/adb)
+  {app}  -  {device} ({codename}) - Windows
 ============================================================
   1) Setup: descargar platform-tools + drivers
   2) Listar dispositivos (adb / fastboot)
   3) Ver info del dispositivo (codename, etc.)
   4) Ver estado del bootloader
-  5) Descargar ROM correcta (autodetecta modelo)
-  6) Reiniciar a modo fastboot (bootloader)
-  7) Wipe data / Factory reset
-  8) Flashear ROM fastboot (carpeta extraida)
-  9) Reiniciar a recovery
- 10) Reiniciar el sistema
+  5) Desbloquear bootloader (fastboot flashing unlock)
+  6) Descargar ROM correcta (tissot)
+  7) Reiniciar a modo fastboot (bootloader)
+  8) Wipe data / Factory reset
+  9) Flashear ROM fastboot (carpeta extraida)
+ 10) Reiniciar a recovery
+ 11) Reiniciar el sistema
   0) Salir
 ------------------------------------------------------------
   adb:      {adb}
@@ -371,7 +442,8 @@ MENU = """
 def menu() -> None:
     while True:
         adb, fb = _tools()
-        print(MENU.format(app=APP, adb=adb or "NO ENCONTRADO", fb=fb or "NO ENCONTRADO"))
+        print(MENU.format(app=APP, device=DEVICE_NAME, codename=DEVICE_CODENAME,
+                          adb=adb or "NO ENCONTRADO", fb=fb or "NO ENCONTRADO"))
         try:
             choice = input("Opcion> ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -388,19 +460,21 @@ def menu() -> None:
             elif choice == "4":
                 bootloader_state()
             elif choice == "5":
-                open_rom()
+                unlock_bootloader()
             elif choice == "6":
+                open_rom()
+            elif choice == "7":
                 reboot("bootloader")
                 print("[i] Espera unos segundos a que entre en modo fastboot.")
                 time.sleep(2)
-            elif choice == "7":
-                wipe_data()
             elif choice == "8":
+                wipe_data()
+            elif choice == "9":
                 folder = input("Ruta de la carpeta de la ROM extraida: ").strip().strip('"')
                 flash_rom(folder)
-            elif choice == "9":
-                reboot("recovery")
             elif choice == "10":
+                reboot("recovery")
+            elif choice == "11":
                 reboot("system")
             elif choice == "0":
                 print("Adios.")
@@ -436,6 +510,8 @@ def main(argv: list[str]) -> int:
         device_info()
     elif cmd == "state":
         bootloader_state()
+    elif cmd == "unlock":
+        unlock_bootloader(assume_yes=yes)
     elif cmd == "rom":
         open_rom()
     elif cmd == "wipe":
