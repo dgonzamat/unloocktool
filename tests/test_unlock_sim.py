@@ -232,6 +232,37 @@ def test_flash_missing_script():
         _sh.rmtree(folder, ignore_errors=True)
 
 
+def test_watch_rising_edge():
+    print("\n== Escenario 10: vigilante abre la GUI solo al conectar ==")
+    import unlooktool_watch as w
+
+    # Secuencia de estados del USB que simulamos ver en cada sondeo:
+    seq = [None, "adb", "adb", None, "fastboot"]
+    counters = {"i": 0, "launch": 0}
+
+    def fake_mode():
+        i = counters["i"]
+        counters["i"] += 1
+        return seq[i] if i < len(seq) else None
+
+    def fake_launch():
+        counters["launch"] += 1
+
+    def fake_sleep(_):
+        if counters["i"] >= len(seq):
+            raise KeyboardInterrupt  # termina el bucle de watch()
+
+    orig = (w.device_mode, w.launch_gui, w.time.sleep)
+    w.device_mode, w.launch_gui, w.time.sleep = fake_mode, fake_launch, fake_sleep
+    try:
+        rc = w.watch(interval=0, launch=True)
+    finally:
+        w.device_mode, w.launch_gui, w.time.sleep = orig
+
+    check(rc == 0, "watch() termino limpio")
+    check(counters["launch"] == 2, "abrio la GUI 2 veces (2 conexiones), no en cada sondeo")
+
+
 def main() -> int:
     print("=" * 60)
     print(" SIMULACION - unlooktool (Mi A1 / tissot)")
@@ -245,6 +276,7 @@ def main() -> int:
     test_flash_ok()
     test_flash_invalid_folder()
     test_flash_missing_script()
+    test_watch_rising_edge()
 
     print("\n" + "=" * 60)
     if _errors == 0:
