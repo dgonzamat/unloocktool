@@ -183,6 +183,55 @@ def open_drivers() -> None:
         webbrowser.open(url)
 
 
+def _powershell() -> str:
+    exe = shutil.which("powershell") or shutil.which("powershell.exe")
+    if exe:
+        return exe
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
+def doctor() -> None:
+    """Muestra dispositivos USB con problema de driver y su ID de hardware."""
+    print("=" * 60)
+    print(" DOCTOR - dispositivos USB sin driver (Codigo 28, etc.)")
+    print("=" * 60)
+    if os.name != "nt":
+        print("[i] Solo Windows.")
+        return
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "Get-PnpDevice -PresentOnly | "
+        "Where-Object { $_.ConfigManagerErrorCode -ne 0 } | ForEach-Object {"
+        " $hw=(Get-PnpDeviceProperty -InstanceId $_.InstanceId "
+        "-KeyName 'DEVPKEY_Device_HardwareIds').Data;"
+        " Write-Output ('--- ' + $_.FriendlyName);"
+        " Write-Output ('    codigo : ' + $_.ConfigManagerErrorCode);"
+        " Write-Output ('    hwid   : ' + ($hw -join ' | ')) }"
+    )
+    try:
+        res = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps],
+                             text=True, capture_output=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[!] No se pudo consultar: {exc}")
+        return
+    out = (res.stdout or "").strip()
+    if not out:
+        print("[OK] No hay dispositivos con problema de driver (o ninguno conectado).")
+        print("     Si el telefono esta en fastboot y no aparece, prueba otro cable/puerto.")
+        return
+    print(out)
+    print()
+    print("[i] Mira la linea 'hwid':")
+    print("    - VID_18D1  -> ID Google (Qualcomm Mi A1 en fastboot; driver de Google)")
+    print("    - VID_2717  -> ID Xiaomi (driver de Xiaomi)")
+    print("    - VID_0E8D  -> ID MediaTek (NO es un Mi A1 Qualcomm real: es un equipo")
+    print("                   MediaTek o un clon. Necesita driver MTK VCOM + SP Flash Tool,")
+    print("                   NO fastboot. unlooktool no aplica a estos equipos.)")
+    print("    - VID_05C6  -> ID Qualcomm (modo EDL 9008)")
+    print("    Pega estas lineas a quien te ayuda para elegir el driver exacto.")
+
+
 def download_usb_driver(force: bool = False) -> None:
     """Descarga y extrae el driver USB de Google (incluye interfaz fastboot)."""
     print("=" * 60)
@@ -563,6 +612,8 @@ def main(argv: list[str]) -> int:
         open_drivers()
     elif cmd == "driver":
         download_usb_driver(force="--force" in args)
+    elif cmd == "doctor":
+        doctor()
     elif cmd == "devices":
         list_devices()
     elif cmd == "info":
