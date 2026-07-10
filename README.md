@@ -69,8 +69,9 @@ python install_autostart.py status      # ¿está instalado?
 
 Esto registra `unlooktool_watch.py` en la carpeta de Inicio de Windows (sin
 permisos de admin). El vigilante sondea el USB y, cuando conectas el Mi A1 (en
-modo **adb** con Depuración USB, o **fastboot**), abre la GUI una sola vez.
-Para probarlo sin reiniciar: `python unlooktool_watch.py`.
+modo **adb** con Depuración USB, o **fastboot**), muestra una **notificación de
+Windows** y abre la GUI una sola vez. Para probarlo sin reiniciar:
+`python unlooktool_watch.py`. Flags: `--interval N`, `--no-launch`, `--no-notify`.
 
 > Nota: si el teléfono está en modo normal **sin** Depuración USB, adb no lo
 > detecta (limitación de Android). Actívala en Opciones de desarrollador.

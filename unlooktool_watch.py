@@ -16,9 +16,11 @@ Uso:
   python unlooktool_watch.py --interval 3   # intervalo de sondeo en segundos
   python unlooktool_watch.py --once         # abre la GUI si YA hay device y sale
   python unlooktool_watch.py --no-launch    # solo muestra el estado, no abre nada
+  python unlooktool_watch.py --no-notify    # no muestra la notificacion de Windows
 """
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 import sys
@@ -54,6 +56,45 @@ def device_mode() -> str | None:
     return None
 
 
+def notify(title: str, message: str) -> None:
+    """Muestra una notificacion nativa de Windows (globo), sin dependencias."""
+    if os.name != "nt":
+        return
+    t = title.replace("'", "''")
+    m = message.replace("'", "''")
+    ps = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "Add-Type -AssemblyName System.Drawing;"
+        "$n = New-Object System.Windows.Forms.NotifyIcon;"
+        "$n.Icon = [System.Drawing.SystemIcons]::Information;"
+        f"$n.BalloonTipTitle = '{t}';"
+        f"$n.BalloonTipText = '{m}';"
+        "$n.Visible = $true;"
+        "$n.ShowBalloonTip(5000);"
+        "Start-Sleep -Seconds 6;"
+        "$n.Dispose()"
+    )
+    # -EncodedCommand (UTF-16LE base64) evita cualquier problema de comillas.
+    b64 = base64.b64encode(ps.encode("utf-16-le")).decode("ascii")
+    try:
+        subprocess.Popen(
+            [_powershell(), "-NoProfile", "-NonInteractive", "-EncodedCommand", b64],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+        )
+    except OSError as exc:
+        print(f"[i] (no se pudo mostrar la notificacion: {exc})")
+
+
+def _powershell() -> str:
+    """Ruta a powershell.exe (robusta aunque el PATH sea minimo)."""
+    import shutil
+    found = shutil.which("powershell") or shutil.which("powershell.exe")
+    if found:
+        return found
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
 def launch_gui() -> None:
     """Abre la GUI sin ventana de consola (pythonw si existe)."""
     pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
@@ -65,7 +106,7 @@ def launch_gui() -> None:
         print(f"[!] No se pudo abrir la GUI: {exc}")
 
 
-def watch(interval: float = 3.0, launch: bool = True) -> int:
+def watch(interval: float = 3.0, launch: bool = True, notify_on: bool = True) -> int:
     print("=" * 56)
     print(" unlooktool_watch - vigilando el USB (Ctrl+C para salir)")
     print("=" * 56)
@@ -80,6 +121,9 @@ def watch(interval: float = 3.0, launch: bool = True) -> int:
             now = mode is not None
             if now and not connected:
                 print(f"[+] Dispositivo detectado (modo: {mode}).")
+                if notify_on:
+                    notify(f"{unlooktool.DEVICE_NAME} conectado",
+                           f"Modo: {mode}. Abriendo unlooktool...")
                 if launch:
                     launch_gui()
             elif not now and connected:
@@ -94,6 +138,7 @@ def watch(interval: float = 3.0, launch: bool = True) -> int:
 def main(argv: list[str]) -> int:
     interval = 3.0
     launch = True
+    notify_on = True
     once = False
     i = 0
     while i < len(argv):
@@ -108,6 +153,8 @@ def main(argv: list[str]) -> int:
             continue
         if a == "--no-launch":
             launch = False
+        elif a == "--no-notify":
+            notify_on = False
         elif a == "--once":
             once = True
         elif a in ("-h", "--help"):
@@ -123,13 +170,16 @@ def main(argv: list[str]) -> int:
         mode = device_mode()
         if mode:
             print(f"[+] Dispositivo presente (modo: {mode}).")
+            if notify_on:
+                notify(f"{unlooktool.DEVICE_NAME} conectado",
+                       f"Modo: {mode}. Abriendo unlooktool...")
             if launch:
                 launch_gui()
             return 0
         print("[-] No hay ningun dispositivo conectado.")
         return 1
 
-    return watch(interval=interval, launch=launch)
+    return watch(interval=interval, launch=launch, notify_on=notify_on)
 
 
 if __name__ == "__main__":

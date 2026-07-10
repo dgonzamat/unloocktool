@@ -248,19 +248,24 @@ def test_watch_rising_edge():
     def fake_launch():
         counters["launch"] += 1
 
+    def fake_notify(title, message):
+        counters["notify"] = counters.get("notify", 0) + 1
+
     def fake_sleep(_):
         if counters["i"] >= len(seq):
             raise KeyboardInterrupt  # termina el bucle de watch()
 
-    orig = (w.device_mode, w.launch_gui, w.time.sleep)
-    w.device_mode, w.launch_gui, w.time.sleep = fake_mode, fake_launch, fake_sleep
+    orig = (w.device_mode, w.launch_gui, w.notify, w.time.sleep)
+    w.device_mode, w.launch_gui, w.notify, w.time.sleep = (
+        fake_mode, fake_launch, fake_notify, fake_sleep)
     try:
-        rc = w.watch(interval=0, launch=True)
+        rc = w.watch(interval=0, launch=True, notify_on=True)
     finally:
-        w.device_mode, w.launch_gui, w.time.sleep = orig
+        w.device_mode, w.launch_gui, w.notify, w.time.sleep = orig
 
     check(rc == 0, "watch() termino limpio")
     check(counters["launch"] == 2, "abrio la GUI 2 veces (2 conexiones), no en cada sondeo")
+    check(counters.get("notify") == 2, "notifico 2 veces (una por conexion)")
 
 
 def main() -> int:
