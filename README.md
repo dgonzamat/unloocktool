@@ -1,15 +1,20 @@
 # unlooktool
 
 Utilidad de línea de comandos **para Windows** que envuelve `fastboot`/`adb`
-para dispositivos **Xiaomi**. Pensada para teléfonos cuyo recovery/bootloader
-**no ofrece la opción "Wipe data / Factory reset"**: permite hacer ese borrado,
-flashear una ROM fastboot y otras tareas de mantenimiento desde el PC.
+para el **Xiaomi Mi A1** (codename **`tissot`**). Pensada para teléfonos cuyo
+recovery/bootloader **no ofrece la opción "Wipe data / Factory reset"**: permite
+hacer ese borrado, desbloquear el bootloader, flashear una ROM fastboot y otras
+tareas de mantenimiento desde el PC.
 
-> ⚠️ **Solo para tu propio dispositivo.** El *wipe* y el *flash* requieren el
-> **bootloader desbloqueado** (proceso oficial **Mi Unlock**). Con el bootloader
-> bloqueado, `fastboot` no permite formatear ni escribir particiones. El borrado
-> es **irreversible**. Esta herramienta **no** intenta sortear bloqueos de
-> cuenta Mi ni protección antirrobo (FRP).
+> ℹ️ **El Mi A1 es Android One (no MIUI).** Se desbloquea directo con
+> `fastboot flashing unlock` (comando `unlock`) — **sin Mi Unlock ni espera de
+> 7 días**. Solo hay que activar antes *Desbloqueo de OEM* en Opciones de
+> desarrollador.
+
+> ⚠️ **Solo para tu propio dispositivo.** El *unlock*, el *wipe* y el *flash*
+> **borran todos los datos** y son **irreversibles**. Con el bootloader
+> bloqueado, `fastboot` no permite formatear ni escribir particiones. Esta
+> herramienta **no** intenta sortear bloqueos de cuenta ni protección antirrobo (FRP).
 
 ## Qué automatiza
 
@@ -58,7 +63,8 @@ python unlooktool.py drivers         # abre páginas de drivers USB
 python unlooktool.py devices         # lista dispositivos (adb y fastboot)
 python unlooktool.py info            # datos del dispositivo (codename, etc.)
 python unlooktool.py state           # estado del bootloader (locked/unlocked)
-python unlooktool.py rom             # detecta codename y abre la ROM correcta
+python unlooktool.py unlock          # desbloquea el bootloader (Mi A1: sin Mi Unlock)
+python unlooktool.py rom             # abre la ROM fastboot correcta (tissot)
 python unlooktool.py reboot bootloader   # entra a modo fastboot
 python unlooktool.py wipe            # wipe data / factory reset (pide confirmar)
 python unlooktool.py flash <carpeta> # flashea una ROM fastboot extraída
@@ -68,26 +74,29 @@ python unlooktool.py reboot          # reinicia el sistema
 El `wipe` y el `flash` piden escribir `BORRAR` para confirmar. Puedes saltar la
 confirmación con `--yes` (con cuidado).
 
-## Flujo completo recomendado
+## Flujo completo recomendado (Mi A1)
 
-1. `python unlooktool.py setup` → instala platform-tools e instala los drivers.
-2. Habilita **Depuración USB** (Opciones de desarrollador) si el sistema arranca.
+1. `python unlooktool.py setup` → instala platform-tools y abre los drivers.
+2. En el teléfono: **Opciones de desarrollador** → activa **Depuración USB** y
+   **Desbloqueo de OEM**.
 3. Conecta el teléfono y entra a fastboot: `python unlooktool.py reboot bootloader`
-4. `python unlooktool.py state` → confirma **DESBLOQUEADO**.
-   - Si está **bloqueado**: desbloquea con **Mi Unlock** (link que abre `setup`).
+4. `python unlooktool.py state` → mira si está bloqueado/desbloqueado.
+   - Si está **bloqueado**: `python unlooktool.py unlock` (confirma en la pantalla
+     del teléfono con los botones de volumen/encendido).
 5. `python unlooktool.py wipe` → escribe `BORRAR`.
 6. (Opcional) Reinstalar sistema:
-   - `python unlooktool.py rom` → descarga la ROma **fastboot** de tu modelo y extráela.
+   - `python unlooktool.py rom` → descarga la ROM **fastboot** de tissot y extráela.
    - `python unlooktool.py flash <carpeta_de_la_rom>`
 
 ## Fuentes usadas
 
 - **platform-tools (adb/fastboot):** servidor oficial de Google
   `dl.google.com/android/repository/platform-tools-latest-windows.zip`
-- **Mi Unlock (oficial Xiaomi):** <https://en.miui.com/unlock/>
 - **Drivers USB Xiaomi:** <https://xiaomidriver.com/> ·
   **Google USB Driver:** <https://developer.android.com/studio/run/win-usb>
-- **ROMs por codename:** <https://xmfirmwareupdater.com/> · <https://xiaomirom.com/en/>
+- **ROM fastboot Mi A1 (tissot):**
+  <https://xiaomirom.com/en/rom/mi-a1-tissot-global-fastboot-recovery-rom/> ·
+  <https://xmfirmwareupdater.com/?search=tissot>
 
 ## Descargo de responsabilidad
 
