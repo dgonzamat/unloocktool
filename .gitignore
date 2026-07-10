@@ -1,0 +1,16 @@
+# Android platform-tools (no versionar binarios grandes)
+platform-tools/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
