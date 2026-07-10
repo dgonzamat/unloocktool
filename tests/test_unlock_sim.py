@@ -28,10 +28,13 @@ import unlooktool  # noqa: E402
 class FakeDevice:
     """Simula un Mi A1 en modo fastboot respondiendo a los comandos emitidos."""
 
-    def __init__(self, present: bool = True, fail_flashing_unlock: bool = False):
+    def __init__(self, present: bool = True, fail_flashing_unlock: bool = False,
+                 fail_wipe: bool = False):
         self.state = {"unlocked": "no", "product": "tissot", "secure": "yes"}
         self.present = present
         self.fail_flashing_unlock = fail_flashing_unlock
+        self.fail_wipe = fail_wipe
+        self.wiped = False
         self.issued: list[str] = []
 
     def run(self, cmd, check=False, text=True, capture_output=False, timeout=None, **kw):
@@ -53,6 +56,15 @@ class FakeDevice:
         elif args[:2] == ["oem", "unlock"]:
             self.state["unlocked"] = "yes"
             out = "...\nOKAY [  0.025s]\nfinished.\n"
+        elif args == ["-w"]:
+            if self.fail_wipe:
+                rc, err = 1, "FAILED (remote: 'not supported')\n"
+            else:
+                self.wiped = True
+                out = "Erasing 'userdata' OKAY\nErasing 'cache' OKAY\n"
+        elif args[:1] == ["erase"]:
+            self.wiped = True
+            out = f"Erasing '{args[1]}' OKAY [  0.010s]\nfinished.\n"
         elif args[:1] == ["reboot"]:
             out = "rebooting...\nfinished.\n"
 
@@ -130,13 +142,109 @@ def test_unlock_no_device():
     )
 
 
+# --------------------------------------------------------------------------- #
+def test_wipe_normal():
+    print("\n== Escenario 4: wipe data normal ==")
+    dev = FakeDevice(present=True)
+    _install(dev)
+
+    out = _run_capturing(lambda: unlooktool.wipe_data(assume_yes=True))
+    print("  --- salida del tool ---")
+    for line in out.strip().splitlines():
+        print(f"    | {line}")
+
+    check("-w" in dev.issued, "emitio 'fastboot -w' (formatea userdata)")
+    check(dev.wiped, "el dispositivo quedo borrado")
+    check("erase userdata" not in dev.issued, "NO uso el fallback (no hizo falta)")
+    check("reboot" in dev.issued, "reinicio el dispositivo al terminar")
+
+
+def test_wipe_fallback():
+    print("\n== Escenario 5: wipe con fallback a 'erase' ==")
+    dev = FakeDevice(present=True, fail_wipe=True)
+    _install(dev)
+
+    _run_capturing(lambda: unlooktool.wipe_data(assume_yes=True))
+    check("-w" in dev.issued, "intento primero 'fastboot -w'")
+    check("erase userdata" in dev.issued, "cayo al fallback 'erase userdata'")
+    check("erase cache" in dev.issued, "y tambien 'erase cache'")
+    check("reboot" in dev.issued, "reinicio el dispositivo al terminar")
+
+
+def test_wipe_no_device():
+    print("\n== Escenario 6: wipe sin dispositivo ==")
+    dev = FakeDevice(present=False)
+    _install(dev)
+
+    out = _run_capturing(lambda: unlooktool.wipe_data(assume_yes=True))
+    check("No hay ningun dispositivo" in out, "avisa que no hay dispositivo")
+    check("-w" not in dev.issued and not dev.wiped, "NO borro nada")
+
+
+def test_flash_ok():
+    print("\n== Escenario 7: flash de ROM (carpeta con flash_all.bat) ==")
+    import tempfile
+    import shutil as _sh
+
+    folder = tempfile.mkdtemp(prefix="rom_")
+    script = os.path.join(folder, "flash_all.bat")
+    with open(script, "w") as fh:
+        fh.write("@echo simulacion de flasheo\n")
+
+    calls: list[list[str]] = []
+
+    def recorder(cmd, **kw):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    unlooktool.subprocess.run = recorder
+    try:
+        out = _run_capturing(lambda: unlooktool.flash_rom(folder, assume_yes=True))
+        check(any("flash_all.bat" in " ".join(c) for c in calls),
+              "ejecuto el flash_all.bat de la carpeta")
+        check("Proceso de flasheo finalizado" in out, "reporto fin del flasheo")
+    finally:
+        _sh.rmtree(folder, ignore_errors=True)
+
+
+def test_flash_invalid_folder():
+    print("\n== Escenario 8: flash con carpeta inexistente ==")
+    calls: list[list[str]] = []
+    unlooktool.subprocess.run = lambda cmd, **kw: calls.append(list(cmd))  # type: ignore
+    out = _run_capturing(lambda: unlooktool.flash_rom("Z:/no/existe", assume_yes=True))
+    check("Carpeta no valida" in out, "avisa que la carpeta no es valida")
+    check(not calls, "NO ejecuto ningun script")
+
+
+def test_flash_missing_script():
+    print("\n== Escenario 9: flash sin flash_all.bat en la carpeta ==")
+    import tempfile
+    import shutil as _sh
+
+    folder = tempfile.mkdtemp(prefix="rom_vacia_")
+    calls: list[list[str]] = []
+    unlooktool.subprocess.run = lambda cmd, **kw: calls.append(list(cmd))  # type: ignore
+    try:
+        out = _run_capturing(lambda: unlooktool.flash_rom(folder, assume_yes=True))
+        check("No encontre 'flash_all.bat'" in out, "avisa que falta flash_all.bat")
+        check(not calls, "NO ejecuto ningun script")
+    finally:
+        _sh.rmtree(folder, ignore_errors=True)
+
+
 def main() -> int:
     print("=" * 60)
-    print(" SIMULACION DE DESBLOQUEO - unlooktool (Mi A1 / tissot)")
+    print(" SIMULACION - unlooktool (Mi A1 / tissot)")
     print("=" * 60)
     test_unlock_normal()
     test_unlock_fallback()
     test_unlock_no_device()
+    test_wipe_normal()
+    test_wipe_fallback()
+    test_wipe_no_device()
+    test_flash_ok()
+    test_flash_invalid_folder()
+    test_flash_missing_script()
 
     print("\n" + "=" * 60)
     if _errors == 0:

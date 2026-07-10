@@ -8,7 +8,9 @@ un teléfono conectado.
 python tests/test_unlock_sim.py
 ```
 
-- `test_unlock_sim.py` — simula el desbloqueo del bootloader (Mi A1 / tissot):
-  desbloqueo normal, fallback a `oem unlock`, y caso sin dispositivo.
+- `test_unlock_sim.py` — 9 escenarios sobre las operaciones críticas:
+  - **unlock**: normal, fallback a `oem unlock`, sin dispositivo.
+  - **wipe**: normal (`fastboot -w`), fallback a `erase userdata/cache`, sin dispositivo.
+  - **flash**: carpeta con `flash_all.bat`, carpeta inexistente, carpeta sin script.
 
 Solo usa la librería estándar (sin `pytest`). Sale con código `0` si todo pasa.
