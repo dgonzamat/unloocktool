@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Test de simulacion del desbloqueo de bootloader (sin hardware real).
+
+Reemplaza 'fastboot' por un mock que se comporta como un dispositivo Mi A1
+conectado en modo fastboot, y ejecuta el flujo REAL de unlooktool.unlock_bootloader
+para verificar:
+  1) Desbloqueo normal: emite 'fastboot flashing unlock' y el device queda unlocked.
+  2) Fallback: si 'flashing unlock' falla, prueba 'oem unlock'.
+  3) Sin dispositivo: no emite ningun comando de desbloqueo y avisa.
+
+Ejecutar:  python tests/test_unlock_sim.py
+"""
+from __future__ import annotations
+
+import io
+import os
+import subprocess
+import sys
+from contextlib import redirect_stdout
+
+# Permitir importar unlooktool.py (carpeta padre)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import unlooktool  # noqa: E402
+
+
+class FakeDevice:
+    """Simula un Mi A1 en modo fastboot respondiendo a los comandos emitidos."""
+
+    def __init__(self, present: bool = True, fail_flashing_unlock: bool = False):
+        self.state = {"unlocked": "no", "product": "tissot", "secure": "yes"}
+        self.present = present
+        self.fail_flashing_unlock = fail_flashing_unlock
+        self.issued: list[str] = []
+
+    def run(self, cmd, check=False, text=True, capture_output=False, timeout=None, **kw):
+        args = list(cmd[1:])  # descarta la ruta del binario 'fastboot'
+        self.issued.append(" ".join(args))
+        out, err, rc = "", "", 0
+
+        if args == ["devices"]:
+            out = "SIM0A1TISSOT\tfastboot\n" if self.present else ""
+        elif args[:1] == ["getvar"]:
+            var = args[1]
+            err = f"{var}: {self.state.get(var, '')}\nfinished. total time: 0.001s\n"
+        elif args[:2] == ["flashing", "unlock"]:
+            if self.fail_flashing_unlock:
+                rc, err = 1, "FAILED (remote: 'unknown command')\n"
+            else:
+                self.state["unlocked"] = "yes"
+                out = "OKAY [  0.030s]\nfinished. total time: 0.031s\n"
+        elif args[:2] == ["oem", "unlock"]:
+            self.state["unlocked"] = "yes"
+            out = "...\nOKAY [  0.025s]\nfinished.\n"
+        elif args[:1] == ["reboot"]:
+            out = "rebooting...\nfinished.\n"
+
+        cp = subprocess.CompletedProcess(cmd, rc, out, err)
+        if check and rc != 0:
+            raise subprocess.CalledProcessError(rc, cmd, out, err)
+        return cp
+
+
+def _install(dev: FakeDevice):
+    """Parchea unlooktool para usar el fastboot simulado."""
+    unlooktool._find_tool = lambda name: "FASTBOOT" if name == "fastboot" else None
+    unlooktool.subprocess.run = dev.run
+
+
+def _run_capturing(fn) -> str:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        fn()
+    return buf.getvalue()
+
+
+PASS, FAIL = "[PASS]", "[FAIL]"
+_errors = 0
+
+
+def check(cond: bool, msg: str) -> None:
+    global _errors
+    print(f"  {PASS if cond else FAIL} {msg}")
+    if not cond:
+        _errors += 1
+
+
+# --------------------------------------------------------------------------- #
+def test_unlock_normal():
+    print("\n== Escenario 1: desbloqueo normal ==")
+    dev = FakeDevice(present=True)
+    _install(dev)
+
+    out = _run_capturing(lambda: unlooktool.unlock_bootloader(assume_yes=True))
+    print("  --- salida del tool ---")
+    for line in out.strip().splitlines():
+        print(f"    | {line}")
+
+    check("flashing unlock" in dev.issued, "emitio 'fastboot flashing unlock'")
+    check(dev.state["unlocked"] == "yes", "el dispositivo quedo unlocked=yes")
+    check("oem unlock" not in dev.issued, "NO uso el fallback (no hizo falta)")
+
+    # Verificar que 'state' ahora reporta DESBLOQUEADO
+    out2 = _run_capturing(unlooktool.bootloader_state)
+    check("DESBLOQUEADO" in out2, "'state' reporta bootloader DESBLOQUEADO")
+
+
+def test_unlock_fallback():
+    print("\n== Escenario 2: fallback a 'oem unlock' ==")
+    dev = FakeDevice(present=True, fail_flashing_unlock=True)
+    _install(dev)
+
+    _run_capturing(lambda: unlooktool.unlock_bootloader(assume_yes=True))
+    check("flashing unlock" in dev.issued, "intento primero 'flashing unlock'")
+    check("oem unlock" in dev.issued, "cayo al fallback 'oem unlock'")
+    check(dev.state["unlocked"] == "yes", "el dispositivo quedo unlocked=yes")
+
+
+def test_unlock_no_device():
+    print("\n== Escenario 3: sin dispositivo conectado ==")
+    dev = FakeDevice(present=False)
+    _install(dev)
+
+    out = _run_capturing(lambda: unlooktool.unlock_bootloader(assume_yes=True))
+    check("No hay ningun dispositivo" in out, "avisa que no hay dispositivo")
+    check(
+        "flashing unlock" not in dev.issued and "oem unlock" not in dev.issued,
+        "NO emitio ningun comando de desbloqueo",
+    )
+
+
+def main() -> int:
+    print("=" * 60)
+    print(" SIMULACION DE DESBLOQUEO - unlooktool (Mi A1 / tissot)")
+    print("=" * 60)
+    test_unlock_normal()
+    test_unlock_fallback()
+    test_unlock_no_device()
+
+    print("\n" + "=" * 60)
+    if _errors == 0:
+        print(" RESULTADO: TODOS LOS TESTS PASARON ")
+    else:
+        print(f" RESULTADO: {_errors} COMPROBACION(ES) FALLARON ")
+    print("=" * 60)
+    return 1 if _errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
