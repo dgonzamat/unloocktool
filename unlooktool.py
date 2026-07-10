@@ -29,6 +29,7 @@ Uso:
   python unlooktool.py                 # menu interactivo
   python unlooktool.py setup           # descarga platform-tools + abre drivers
   python unlooktool.py drivers         # abre paginas de drivers USB
+  python unlooktool.py driver          # descarga el driver USB de Google (fastboot)
   python unlooktool.py devices         # lista dispositivos
   python unlooktool.py info            # datos del dispositivo (codename, etc.)
   python unlooktool.py state           # estado del bootloader (locked/unlocked)
@@ -67,6 +68,9 @@ DEVICE_CODENAME = "tissot"
 URL_PLATFORM_TOOLS = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
 URL_USB_DRIVER_MI = "https://xiaomidriver.com/"          # driver USB Xiaomi
 URL_USB_DRIVER_GOOGLE = "https://developer.android.com/studio/run/win-usb"  # Google USB driver
+# Driver USB de Google (incluye 'Android Bootloader Interface' para fastboot)
+URL_USB_DRIVER_GOOGLE_ZIP = "https://dl.google.com/android/repository/latest_usb_driver_windows.zip"
+DRIVER_DIR = os.path.join(HERE, "usb_driver")
 # ROMs fastboot del Mi A1 (tissot). Son especificas del modelo (3-6 GB), no se
 # descargan automatico; abrimos la pagina correcta del codename.
 URL_ROM_TISSOT = "https://xiaomirom.com/en/rom/mi-a1-tissot-global-fastboot-recovery-rom/"
@@ -164,16 +168,8 @@ def setup_tools(force: bool = False) -> None:
             return
 
     print()
-    print("[i] Ahora necesitas los DRIVERS USB de Xiaomi.")
-    print(f"    - Driver Xiaomi:  {URL_USB_DRIVER_MI}")
-    print(f"    - Google USB:     {URL_USB_DRIVER_GOOGLE}")
-    print(f"    [i] El {DEVICE_NAME} NO usa Mi Unlock: se desbloquea con 'unlock'.")
-    try:
-        ans = input("\n¿Abrir las paginas de drivers en el navegador? [s/N]: ").strip().lower()
-    except EOFError:
-        ans = "n"
-    if ans in ("s", "si", "y", "yes"):
-        open_drivers()
+    print("[i] Descargando tambien el DRIVER USB (necesario para fastboot)...")
+    download_usb_driver()
 
     adb, fb = _tools()
     print(f"\n    adb:      {adb or 'NO ENCONTRADO'}")
@@ -185,6 +181,41 @@ def open_drivers() -> None:
     for url in (URL_USB_DRIVER_MI, URL_USB_DRIVER_GOOGLE):
         print(f"    -> {url}")
         webbrowser.open(url)
+
+
+def download_usb_driver(force: bool = False) -> None:
+    """Descarga y extrae el driver USB de Google (incluye interfaz fastboot)."""
+    print("=" * 60)
+    print(" DRIVER USB (Google) - incluye 'Android Bootloader Interface'")
+    print("=" * 60)
+    inf = os.path.join(DRIVER_DIR, "android_winusb.inf")
+    if os.path.isfile(inf) and not force:
+        print(f"[OK] Ya esta descargado en: {DRIVER_DIR}")
+    else:
+        zip_path = os.path.join(HERE, "usb_driver.zip")
+        try:
+            _download(URL_USB_DRIVER_GOOGLE_ZIP, zip_path)
+            print("[i] Extrayendo...")
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(HERE)  # crea la carpeta usb_driver/
+            os.remove(zip_path)
+            print(f"[OK] Driver listo en: {DRIVER_DIR}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[!] Fallo la descarga: {exc}")
+            print(f"    Descarga manual: {URL_USB_DRIVER_GOOGLE}")
+            return
+
+    print()
+    print("[i] AHORA instala el driver a mano (con el telefono en modo fastboot):")
+    print("    1) Pulsa Windows, abre 'Administrador de dispositivos'.")
+    print("    2) Busca el dispositivo con triangulo amarillo (Codigo 28 / 'Android').")
+    print("    3) Clic derecho -> Actualizar controlador.")
+    print("    4) 'Buscar controladores en mi equipo'.")
+    print(f"    5) Escribe o pega esta carpeta:  {DRIVER_DIR}")
+    print("       marca 'Incluir subcarpetas' y pulsa Siguiente.")
+    print("    6) Acepta si Windows avisa que no esta firmado -> Instalar.")
+    print("    7) Deberia aparecer 'Android Bootloader Interface'. Listo.")
+    print("\n[i] Luego vuelve al menu y prueba la opcion 4 (estado del bootloader).")
 
 
 # --------------------------------------------------------------------------- #
@@ -530,6 +561,8 @@ def main(argv: list[str]) -> int:
         setup_tools(force="--force" in args)
     elif cmd == "drivers":
         open_drivers()
+    elif cmd == "driver":
+        download_usb_driver(force="--force" in args)
     elif cmd == "devices":
         list_devices()
     elif cmd == "info":

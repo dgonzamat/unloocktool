@@ -1,5 +1,6 @@
-# Android platform-tools (no versionar binarios grandes)
+# Android platform-tools y drivers (no versionar binarios grandes)
 platform-tools/
+usb_driver/
 *.zip
 
 # Python
