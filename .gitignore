@@ -1,6 +1,7 @@
 # Android platform-tools y drivers (no versionar binarios grandes)
 platform-tools/
 usb_driver/
+mtkclient/
 *.zip
 
 # Python
