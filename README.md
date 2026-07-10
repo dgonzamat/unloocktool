@@ -49,7 +49,17 @@ drivers y Mi Unlock. En Windows también puedes **hacer doble clic en
 
 ## Uso
 
-### Menú interactivo
+### Interfaz gráfica (recomendada)
+
+```bash
+python unlooktool_gui.py
+```
+
+O en Windows, **doble clic en `unlooktool_gui.bat`**. Es una ventana con botones
+para cada acción y un panel de salida. Las acciones destructivas (desbloquear,
+wipe, flashear) piden confirmación en un cuadro de diálogo.
+
+### Menú interactivo (consola)
 
 ```bash
 python unlooktool.py
